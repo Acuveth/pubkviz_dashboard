@@ -1,23 +1,31 @@
-import logo from './logo.svg';
-import './App.css';
+// src/App.js
+import React, { useState } from 'react';
+import LoginScreen from './components/LoginScreen';
+import Dashboard from './components/Dashboard';
 
 function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [user, setUser] = useState(null);
+
+  const handleLogin = (userData) => {
+    // In a real app, you would validate credentials against an API
+    // For demo purposes, we'll just accept any login
+    setUser(userData);
+    setIsLoggedIn(true);
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    setIsLoggedIn(false);
+  };
+
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
+    <div className="min-h-screen bg-gray-100">
+      {isLoggedIn ? (
+        <Dashboard user={user} onLogout={handleLogout} />
+      ) : (
+        <LoginScreen onLogin={handleLogin} />
+      )}
     </div>
   );
 }
