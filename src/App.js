@@ -7,6 +7,7 @@ function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [user, setUser] = useState(null);
 
+
   const handleLogin = (userData) => {
     // In a real app, you would validate credentials against an API
     // For demo purposes, we'll just accept any login
@@ -21,10 +22,11 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-100">
+
       {isLoggedIn ? (
         <Dashboard user={user} onLogout={handleLogout} />
       ) : (
-        <LoginScreen onLogin={handleLogin} />
+     <LoginScreen onLogin={handleLogin} />
       )}
     </div>
   );
