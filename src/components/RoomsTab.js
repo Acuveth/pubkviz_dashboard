@@ -1,5 +1,6 @@
 // src/components/RoomsTab.js
 import React, { useState, useEffect } from 'react';
+import { roomsApi, roomMenuSettingsApi, getAvailableMenus } from '../services/roomsApi';
 
 function RoomsTab() {
   // Rooms State
@@ -23,41 +24,46 @@ function RoomsTab() {
     menu_description: ''
   });
   const [showRoomMenuSettingsForm, setShowRoomMenuSettingsForm] = useState(false);
+  
+  // Loading and error states
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   // Load data on component mount
   useEffect(() => {
-    // In a real app, you would fetch this data from your API
-    // For this example, we'll use mock data
-    
-    // Mock rooms
-    const mockRooms = [
-      { id: 'sample_room', name: 'Sample Pub Quiz', is_active: true, created_at: '2025-03-11 20:49:35' },
-      { id: 'test_room', name: 'Test Room', is_active: true, created_at: '2025-03-12 19:03:40' },
-      { id: 'weekly_quiz', name: 'Weekly Trivia Night', is_active: true, created_at: '2025-03-11 20:49:35' }
-    ];
-    
-    // Mock menus
-    const mockMenus = [
-      { id: 1, name: 'Main Food Menu', description: 'Regular food items' },
-      { id: 2, name: 'Weekend Special Menu', description: 'Special items available only on weekends' },
-      { id: 3, name: 'Drinks Menu', description: 'Beverages and cocktails' }
-    ];
-    
-    // Mock room menu settings
-    const mockRoomMenuSettings = [
-      { 
-        room_id: 'sample_room', 
-        show_menu: true, 
-        menu_id: 1, 
-        menu_description: 'Enjoy our delicious pub food while you play!', 
-        created_at: '2025-03-12 19:46:46' 
-      }
-    ];
-    
-    setRooms(mockRooms);
-    setAvailableMenus(mockMenus);
-    setRoomMenuSettings(mockRoomMenuSettings);
+    fetchData();
   }, []);
+
+  // Function to handle API errors
+  const handleApiError = (error) => {
+    console.error('API Error:', error);
+    setError(error.message || 'An unexpected error occurred');
+    setLoading(false);
+  };
+
+  // Function to fetch all required data
+  const fetchData = async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      // Fetch rooms
+      const roomsData = await roomsApi.getAll();
+      setRooms(roomsData);
+      
+      // Fetch available menus
+      const menusData = await getAvailableMenus();
+      setAvailableMenus(menusData);
+      
+      // Fetch room menu settings
+      const settingsData = await roomMenuSettingsApi.getAll();
+      setRoomMenuSettings(settingsData);
+      
+      setLoading(false);
+    } catch (error) {
+      handleApiError(error);
+    }
+  };
 
   // Room handlers
   const handleRoomInputChange = (e) => {
@@ -77,7 +83,7 @@ function RoomsTab() {
     setIsEditingRoom(false);
   };
   
-  const handleRoomSubmit = (e) => {
+  const handleRoomSubmit = async (e) => {
     e.preventDefault();
     
     if (!currentRoom.id || !currentRoom.name) {
@@ -85,29 +91,32 @@ function RoomsTab() {
       return;
     }
     
-    if (isEditingRoom) {
-      // Update existing room
-      setRooms(
-        rooms.map((room) =>
-          room.id === currentRoom.id ? currentRoom : room
-        )
-      );
-    } else {
-      // Check if room ID already exists
-      if (rooms.some(room => room.id === currentRoom.id)) {
-        alert('A room with this ID already exists');
-        return;
+    setLoading(true);
+    setError(null);
+    
+    try {
+      if (isEditingRoom) {
+        // Update existing room
+        const updatedRoom = await roomsApi.update(currentRoom.id, currentRoom);
+        setRooms(rooms.map(room => room.id === updatedRoom.id ? updatedRoom : room));
+      } else {
+        // Check if room ID already exists
+        if (rooms.some(room => room.id === currentRoom.id)) {
+          alert('A room with this ID already exists');
+          setLoading(false);
+          return;
+        }
+        
+        // Add new room
+        const newRoom = await roomsApi.create(currentRoom);
+        setRooms([...rooms, newRoom]);
       }
       
-      // Add new room
-      const newRoom = {
-        ...currentRoom,
-        created_at: new Date().toISOString()
-      };
-      setRooms([...rooms, newRoom]);
+      resetRoomForm();
+      setLoading(false);
+    } catch (error) {
+      handleApiError(error);
     }
-    
-    resetRoomForm();
   };
   
   const editRoom = (room) => {
@@ -115,11 +124,24 @@ function RoomsTab() {
     setCurrentRoom(room);
   };
   
-  const deleteRoom = (id) => {
+  const deleteRoom = async (id) => {
     if (window.confirm('Are you sure you want to delete this room?')) {
-      setRooms(rooms.filter(room => room.id !== id));
-      // Also delete any associated menu settings
-      setRoomMenuSettings(roomMenuSettings.filter(setting => setting.room_id !== id));
+      setLoading(true);
+      setError(null);
+      
+      try {
+        await roomsApi.delete(id);
+        
+        // Update local state
+        setRooms(rooms.filter(room => room.id !== id));
+        
+        // Delete is cascaded on the backend, but we'll also update the frontend state
+        setRoomMenuSettings(roomMenuSettings.filter(setting => setting.room_id !== id));
+        
+        setLoading(false);
+      } catch (error) {
+        handleApiError(error);
+      }
     }
   };
   
@@ -132,50 +154,78 @@ function RoomsTab() {
     });
   };
   
-  const manageRoomMenuSettings = (roomId) => {
-    // Check if menu settings exist for this room
-    const existingSettings = roomMenuSettings.find(setting => setting.room_id === roomId);
+  const manageRoomMenuSettings = async (roomId) => {
+    setLoading(true);
+    setError(null);
     
-    if (existingSettings) {
-      setCurrentRoomMenuSetting(existingSettings);
-    } else {
-      setCurrentRoomMenuSetting({
-        room_id: roomId,
-        show_menu: true,
-        menu_id: availableMenus.length > 0 ? availableMenus[0].id : '',
-        menu_description: ''
-      });
+    try {
+      // Check if menu settings exist for this room
+      const existingSettingIndex = roomMenuSettings.findIndex(
+        setting => setting.room_id === roomId
+      );
+      
+      if (existingSettingIndex >= 0) {
+        // Use existing settings from state
+        setCurrentRoomMenuSetting(roomMenuSettings[existingSettingIndex]);
+      } else {
+        try {
+          // Try to fetch settings from API in case they exist but aren't in local state
+          const settings = await roomMenuSettingsApi.getByRoomId(roomId);
+          setCurrentRoomMenuSetting(settings);
+        } catch (error) {
+          // Settings don't exist yet, create new default settings
+          setCurrentRoomMenuSetting({
+            room_id: roomId,
+            show_menu: true,
+            menu_id: availableMenus.length > 0 ? availableMenus[0].id : '',
+            menu_description: ''
+          });
+        }
+      }
+      
+      setShowRoomMenuSettingsForm(true);
+      setLoading(false);
+    } catch (error) {
+      handleApiError(error);
     }
-    
-    setShowRoomMenuSettingsForm(true);
   };
   
-  const handleRoomMenuSettingSubmit = (e) => {
+  const handleRoomMenuSettingSubmit = async (e) => {
     e.preventDefault();
     
-    // Check if setting already exists for this room
-    const existingSettingIndex = roomMenuSettings.findIndex(
-      setting => setting.room_id === currentRoomMenuSetting.room_id
-    );
+    setLoading(true);
+    setError(null);
     
-    if (existingSettingIndex >= 0) {
-      // Update existing setting
-      const updatedSettings = [...roomMenuSettings];
-      updatedSettings[existingSettingIndex] = {
-        ...currentRoomMenuSetting,
-        created_at: new Date().toISOString()
-      };
-      setRoomMenuSettings(updatedSettings);
-    } else {
-      // Add new setting
-      const newSetting = {
-        ...currentRoomMenuSetting,
-        created_at: new Date().toISOString()
-      };
-      setRoomMenuSettings([...roomMenuSettings, newSetting]);
+    try {
+      // Check if setting already exists for this room
+      const existingSettingIndex = roomMenuSettings.findIndex(
+        setting => setting.room_id === currentRoomMenuSetting.room_id
+      );
+      
+      let savedSettings;
+      
+      if (existingSettingIndex >= 0) {
+        // Update existing setting
+        savedSettings = await roomMenuSettingsApi.update(
+          currentRoomMenuSetting.room_id, 
+          currentRoomMenuSetting
+        );
+        
+        // Update local state
+        const updatedSettings = [...roomMenuSettings];
+        updatedSettings[existingSettingIndex] = savedSettings;
+        setRoomMenuSettings(updatedSettings);
+      } else {
+        // Add new setting
+        savedSettings = await roomMenuSettingsApi.create(currentRoomMenuSetting);
+        setRoomMenuSettings([...roomMenuSettings, savedSettings]);
+      }
+      
+      setShowRoomMenuSettingsForm(false);
+      setLoading(false);
+    } catch (error) {
+      handleApiError(error);
     }
-    
-    setShowRoomMenuSettingsForm(false);
   };
   
   const cancelRoomMenuSettingForm = () => {
@@ -196,6 +246,31 @@ function RoomsTab() {
 
   return (
     <div className="space-y-6">
+      {/* Error Alert */}
+      {error && (
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+          <strong className="font-bold">Error: </strong>
+          <span className="block sm:inline">{error}</span>
+          <button 
+            className="absolute top-0 bottom-0 right-0 px-4 py-3"
+            onClick={() => setError(null)}
+          >
+            <span className="text-red-500">×</span>
+          </button>
+        </div>
+      )}
+      
+      {/* Loading Indicator */}
+      {loading && (
+        <div className="flex justify-center items-center py-4">
+          <svg className="animate-spin h-6 w-6 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span className="ml-2 text-indigo-600">Loading...</span>
+        </div>
+      )}
+
       {/* Rooms Form */}
       <div className="p-6 bg-white rounded-lg shadow">
         <h2 className="text-lg font-medium text-gray-900">
@@ -216,7 +291,7 @@ function RoomsTab() {
                 onChange={handleRoomInputChange}
                 className="block w-full mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
                 required
-                disabled={isEditingRoom} // Can't change room ID when editing
+                disabled={isEditingRoom || loading} // Can't change room ID when editing
               />
               <p className="mt-1 text-xs text-gray-500">
                 Unique identifier used in the system (e.g., weekly_quiz)
@@ -235,6 +310,7 @@ function RoomsTab() {
                 onChange={handleRoomInputChange}
                 className="block w-full mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
                 required
+                disabled={loading}
               />
             </div>
           </div>
@@ -248,6 +324,7 @@ function RoomsTab() {
                 checked={currentRoom.is_active}
                 onChange={handleRoomInputChange}
                 className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                disabled={loading}
               />
             </div>
             <div className="ml-3 text-sm">
@@ -260,6 +337,7 @@ function RoomsTab() {
             <button
               type="submit"
               className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              disabled={loading}
             >
               {isEditingRoom ? 'Update Room' : 'Add Room'}
             </button>
@@ -269,6 +347,7 @@ function RoomsTab() {
                 type="button"
                 onClick={resetRoomForm}
                 className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                disabled={loading}
               >
                 Cancel
               </button>
@@ -333,18 +412,21 @@ function RoomsTab() {
                       <button
                         onClick={() => editRoom(room)}
                         className="text-indigo-600 hover:text-indigo-900 mr-2"
+                        disabled={loading}
                       >
                         Edit
                       </button>
                       <button
                         onClick={() => manageRoomMenuSettings(room.id)}
                         className="text-green-600 hover:text-green-900 mr-2"
+                        disabled={loading}
                       >
                         Menu Settings
                       </button>
                       <button
                         onClick={() => deleteRoom(room.id)}
                         className="text-red-600 hover:text-red-900"
+                        disabled={loading}
                       >
                         Delete
                       </button>
@@ -352,7 +434,7 @@ function RoomsTab() {
                   </tr>
                 );
               })}
-              {rooms.length === 0 && (
+              {rooms.length === 0 && !loading && (
                 <tr>
                   <td colSpan="5" className="py-4 pl-4 pr-3 text-sm font-medium text-gray-500 text-center">
                     No rooms found
@@ -382,6 +464,7 @@ function RoomsTab() {
                     checked={currentRoomMenuSetting.show_menu}
                     onChange={handleRoomMenuSettingInputChange}
                     className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                    disabled={loading}
                   />
                 </div>
                 <div className="ml-3 text-sm">
@@ -401,6 +484,7 @@ function RoomsTab() {
                     value={currentRoomMenuSetting.menu_id}
                     onChange={handleRoomMenuSettingInputChange}
                     className="block w-full mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                    disabled={loading}
                   >
                     <option value="">Select a menu</option>
                     {availableMenus.map(menu => (
@@ -423,6 +507,7 @@ function RoomsTab() {
                   value={currentRoomMenuSetting.menu_description || ''}
                   onChange={handleRoomMenuSettingInputChange}
                   className="block w-full mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                  disabled={loading}
                 />
                 <p className="mt-1 text-xs text-gray-500">
                   Optional text to display above the menu
@@ -433,6 +518,7 @@ function RoomsTab() {
                 <button
                   type="submit"
                   className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                  disabled={loading}
                 >
                   Save Settings
                 </button>
@@ -441,6 +527,7 @@ function RoomsTab() {
                   type="button"
                   onClick={cancelRoomMenuSettingForm}
                   className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                  disabled={loading}
                 >
                   Cancel
                 </button>

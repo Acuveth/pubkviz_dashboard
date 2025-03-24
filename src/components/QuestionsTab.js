@@ -1,5 +1,6 @@
 // src/components/QuestionsTab.js
 import React, { useState, useEffect } from 'react';
+import { roomsApi, questionsApi, optionsApi } from '../services/questionsApi';
 
 function QuestionsTab() {
   const [questions, setQuestions] = useState([]);
@@ -17,65 +18,47 @@ function QuestionsTab() {
     time_limit: null,
     is_active: false
   });
+  
+  // Loading and error states
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   const questionTypes = [
     { value: 'TEXT', label: 'Text Answer' },
     { value: 'MULTIPLE_CHOICE', label: 'Multiple Choice' }
   ];
 
-  // Fetch questions data - in a real application, this would be an API call
+  // Fetch questions and rooms data on component mount
   useEffect(() => {
-    // Simulating data fetching
-    const fetchedQuestions = [
-      { 
-        id: 1, 
-        room_id: 'sample_room', 
-        text: 'What is the capital of France?', 
-        question_type: 'TEXT', 
-        correct_answer: 'Paris', 
-        points: 1, 
-        time_limit: 30, 
-        is_active: false 
-      },
-      { 
-        id: 2, 
-        room_id: 'sample_room', 
-        text: 'Who wrote "Romeo and Juliet"?', 
-        question_type: 'TEXT', 
-        correct_answer: 'William Shakespeare', 
-        points: 2, 
-        time_limit: null, 
-        is_active: false 
-      },
-      { 
-        id: 3, 
-        room_id: 'sample_room', 
-        text: 'What is the chemical symbol for gold?', 
-        question_type: 'MULTIPLE_CHOICE', 
-        correct_answer: 'A', 
-        points: 1, 
-        time_limit: 45, 
-        is_active: false,
-        options: [
-          { id: 1, question_id: 3, option_letter: 'A', option_text: 'Au' },
-          { id: 2, question_id: 3, option_letter: 'B', option_text: 'Ag' },
-          { id: 3, question_id: 3, option_letter: 'C', option_text: 'Fe' },
-          { id: 4, question_id: 3, option_letter: 'D', option_text: 'Pb' }
-        ]
-      }
-    ];
-    
-    setQuestions(fetchedQuestions);
-    
-    // Fetch rooms as well
-    const fetchedRooms = [
-      { id: 'sample_room', name: 'Sample Pub Quiz' },
-      { id: 'test_room', name: 'Test Room' },
-      { id: 'weekly_quiz', name: 'Weekly Trivia Night' }
-    ];
-    
-    setRooms(fetchedRooms);
+    fetchData();
   }, []);
+
+  // Function to handle API errors
+  const handleApiError = (error) => {
+    console.error('API Error:', error);
+    setError(error.message || 'An unexpected error occurred');
+    setLoading(false);
+  };
+
+  // Function to fetch all required data
+  const fetchData = async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      // Fetch rooms
+      const roomsData = await roomsApi.getAll();
+      setRooms(roomsData);
+      
+      // Fetch questions with their options
+      const questionsData = await questionsApi.getAll();
+      setQuestions(questionsData);
+      
+      setLoading(false);
+    } catch (error) {
+      handleApiError(error);
+    }
+  };
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -134,7 +117,7 @@ function QuestionsTab() {
     setIsAddingOptions(false);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
     if (!currentQuestion.text || !currentQuestion.room_id) {
@@ -147,32 +130,43 @@ function QuestionsTab() {
       return;
     }
 
-    let questionToSave = { ...currentQuestion };
+    setLoading(true);
+    setError(null);
     
-    if (currentQuestion.question_type === 'MULTIPLE_CHOICE') {
-      questionToSave.options = options;
+    try {
+      let savedQuestion;
+      
+      if (isEditing) {
+        // Update existing question
+        savedQuestion = await questionsApi.update(currentQuestion.id, currentQuestion);
+      } else {
+        // Create new question
+        savedQuestion = await questionsApi.create(currentQuestion);
+      }
+      
+      // If it's a multiple choice question, save the options
+      if (currentQuestion.question_type === 'MULTIPLE_CHOICE') {
+        await optionsApi.bulkCreateOrUpdate(savedQuestion.id, { options });
+        
+        // Fetch the updated question with options to get the complete data
+        savedQuestion = await questionsApi.getById(savedQuestion.id);
+      }
+      
+      // Update the questions list
+      if (isEditing) {
+        setQuestions(questions.map(q => q.id === savedQuestion.id ? savedQuestion : q));
+      } else {
+        setQuestions([...questions, savedQuestion]);
+      }
+      
+      resetForm();
+      setLoading(false);
+    } catch (error) {
+      handleApiError(error);
     }
-
-    if (isEditing) {
-      // Update existing question
-      setQuestions(
-        questions.map((q) =>
-          q.id === currentQuestion.id ? questionToSave : q
-        )
-      );
-    } else {
-      // Add new question
-      const newQuestion = {
-        ...questionToSave,
-        id: questions.length > 0 ? Math.max(...questions.map(q => q.id)) + 1 : 1
-      };
-      setQuestions([...questions, newQuestion]);
-    }
-    
-    resetForm();
   };
 
-  const editQuestion = (question) => {
+  const editQuestion = async (question) => {
     setIsEditing(true);
     setCurrentQuestion({
       id: question.id,
@@ -185,18 +179,47 @@ function QuestionsTab() {
       is_active: question.is_active
     });
     
-    if (question.question_type === 'MULTIPLE_CHOICE' && question.options) {
-      setOptions(question.options.map(opt => ({ ...opt })));
+    if (question.question_type === 'MULTIPLE_CHOICE') {
       setIsAddingOptions(true);
+      
+      if (question.options && question.options.length > 0) {
+        // Use options from the question if available
+        setOptions(question.options.map(opt => ({
+          option_letter: opt.option_letter,
+          option_text: opt.option_text
+        })));
+      } else {
+        // Otherwise, fetch options from the API
+        try {
+          setLoading(true);
+          const optionsData = await optionsApi.getByQuestionId(question.id);
+          setOptions(optionsData.map(opt => ({
+            option_letter: opt.option_letter,
+            option_text: opt.option_text
+          })));
+          setLoading(false);
+        } catch (error) {
+          handleApiError(error);
+        }
+      }
     } else {
       setOptions([]);
       setIsAddingOptions(false);
     }
   };
 
-  const deleteQuestion = (id) => {
+  const deleteQuestion = async (id) => {
     if (window.confirm('Are you sure you want to delete this question?')) {
-      setQuestions(questions.filter(q => q.id !== id));
+      setLoading(true);
+      setError(null);
+      
+      try {
+        await questionsApi.delete(id);
+        setQuestions(questions.filter(q => q.id !== id));
+        setLoading(false);
+      } catch (error) {
+        handleApiError(error);
+      }
     }
   };
 
@@ -220,6 +243,31 @@ function QuestionsTab() {
 
   return (
     <div className="space-y-6">
+      {/* Error Alert */}
+      {error && (
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+          <strong className="font-bold">Error: </strong>
+          <span className="block sm:inline">{error}</span>
+          <button 
+            className="absolute top-0 bottom-0 right-0 px-4 py-3"
+            onClick={() => setError(null)}
+          >
+            <span className="text-red-500">×</span>
+          </button>
+        </div>
+      )}
+      
+      {/* Loading Indicator */}
+      {loading && (
+        <div className="flex justify-center items-center py-4">
+          <svg className="animate-spin h-6 w-6 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span className="ml-2 text-indigo-600">Loading...</span>
+        </div>
+      )}
+
       <div className="p-6 bg-white rounded-lg shadow">
         <h2 className="text-lg font-medium text-gray-900">
           {isEditing ? 'Edit Question' : 'Add New Question'}
@@ -238,6 +286,7 @@ function QuestionsTab() {
                 onChange={handleInputChange}
                 className="block w-full mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
                 required
+                disabled={loading}
               >
                 <option value="">Select a room</option>
                 {rooms.map(room => (
@@ -256,6 +305,7 @@ function QuestionsTab() {
                 value={currentQuestion.question_type}
                 onChange={toggleQuestionType}
                 className="block w-full mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                disabled={loading}
               >
                 {questionTypes.map(type => (
                   <option key={type.value} value={type.value}>{type.label}</option>
@@ -276,6 +326,7 @@ function QuestionsTab() {
               onChange={handleInputChange}
               className="block w-full mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
               required
+              disabled={loading}
             />
           </div>
           
@@ -288,6 +339,7 @@ function QuestionsTab() {
                   type="button"
                   onClick={addOption}
                   className="px-2 py-1 text-xs text-white bg-indigo-600 rounded-md hover:bg-indigo-700"
+                  disabled={loading || options.length >= 8}
                 >
                   Add Option
                 </button>
@@ -308,12 +360,14 @@ function QuestionsTab() {
                       className="block w-full border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
                       placeholder="Option text"
                       required
+                      disabled={loading}
                     />
                   </div>
                   <button
                     type="button"
                     onClick={() => removeOption(index)}
                     className="px-2 py-1 text-xs text-white bg-red-600 rounded-md hover:bg-red-700"
+                    disabled={loading || options.length <= 2}
                   >
                     Remove
                   </button>
@@ -331,6 +385,7 @@ function QuestionsTab() {
                   onChange={handleInputChange}
                   className="block w-full mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
                   required
+                  disabled={loading}
                 >
                   <option value="">Select correct answer</option>
                   {options.map((option, index) => (
@@ -357,6 +412,7 @@ function QuestionsTab() {
                 onChange={handleInputChange}
                 className="block w-full mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
                 required
+                disabled={loading}
               />
             </div>
           )}
@@ -374,6 +430,7 @@ function QuestionsTab() {
                 value={currentQuestion.points || ''}
                 onChange={handleInputChange}
                 className="block w-full mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                disabled={loading}
               />
             </div>
             
@@ -389,6 +446,7 @@ function QuestionsTab() {
                 value={currentQuestion.time_limit || ''}
                 onChange={handleInputChange}
                 className="block w-full mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                disabled={loading}
               />
             </div>
           </div>
@@ -401,6 +459,7 @@ function QuestionsTab() {
               checked={currentQuestion.is_active}
               onChange={handleInputChange}
               className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+              disabled={loading}
             />
             <label htmlFor="is_active" className="block ml-2 text-sm text-gray-700">
               Active (available for quiz)
@@ -411,6 +470,7 @@ function QuestionsTab() {
             <button
               type="submit"
               className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              disabled={loading}
             >
               {isEditing ? 'Update Question' : 'Add Question'}
             </button>
@@ -420,6 +480,7 @@ function QuestionsTab() {
                 type="button"
                 onClick={resetForm}
                 className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                disabled={loading}
               >
                 Cancel
               </button>
@@ -470,18 +531,27 @@ function QuestionsTab() {
                     <button
                       onClick={() => editQuestion(question)}
                       className="text-indigo-600 hover:text-indigo-900 mr-2"
+                      disabled={loading}
                     >
                       Edit
                     </button>
                     <button
                       onClick={() => deleteQuestion(question.id)}
                       className="text-red-600 hover:text-red-900"
+                      disabled={loading}
                     >
                       Delete
                     </button>
                   </td>
                 </tr>
               ))}
+              {questions.length === 0 && !loading && (
+                <tr>
+                  <td colSpan="7" className="py-4 pl-4 pr-3 text-sm font-medium text-gray-500 text-center">
+                    No questions found. Add your first question above.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
